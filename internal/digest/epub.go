@@ -30,6 +30,8 @@ img { max-width: 100%; height: auto; }
 `
 
 // RenderEPUB produces an EPUB file (bytes) with one chapter per story.
+// Images found in the article HTML are downloaded, resized to e-reader
+// dimensions, and embedded directly in the EPUB so they display offline.
 func RenderEPUB(runTime time.Time, entries []Entry) ([]byte, error) {
 	title := fmt.Sprintf("Hacker News Top %d — %s", len(entries), runTime.UTC().Format("2006-01-02"))
 
@@ -48,8 +50,15 @@ func RenderEPUB(runTime time.Time, entries []Entry) ([]byte, error) {
 		return nil, fmt.Errorf("add css: %w", err)
 	}
 
+	imgProc, err := newImgProcessor(book)
+	if err != nil {
+		return nil, fmt.Errorf("image processor: %w", err)
+	}
+	defer imgProc.close()
+
 	for i, e := range entries {
 		body, secTitle := buildChapter(i+1, e)
+		body = imgProc.processHTML(body)
 		if _, err := book.AddSection(body, secTitle, fmt.Sprintf("story-%04d.xhtml", i+1), cssPath); err != nil {
 			return nil, fmt.Errorf("add section %d: %w", i+1, err)
 		}

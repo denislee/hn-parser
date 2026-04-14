@@ -78,6 +78,10 @@ func Publish(opts Options) (bool, error) {
 		}
 	}
 
+	if err := pruneOld(subdirAbs, 7); err != nil {
+		return false, fmt.Errorf("prune old digests: %w", err)
+	}
+
 	if err := writeIndex(subdirAbs); err != nil {
 		return false, fmt.Errorf("write index: %w", err)
 	}
@@ -161,6 +165,28 @@ func isCleanStaged(dir string) (bool, error) {
 // digestFilePattern matches our dated digest files. The capture groups expose
 // the date and extension so we can group multiple formats (html, epub) per day.
 var digestFilePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.(html|epub)$`)
+
+// pruneOld removes digest files older than keepDays from subdirAbs.
+func pruneOld(subdirAbs string, keepDays int) error {
+	cutoff := time.Now().UTC().AddDate(0, 0, -keepDays).Format("2006-01-02")
+
+	ents, err := os.ReadDir(subdirAbs)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		m := digestFilePattern.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		if m[1] < cutoff {
+			if err := os.Remove(filepath.Join(subdirAbs, e.Name())); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 func writeIndex(subdirAbs string) error {
 	ents, err := os.ReadDir(subdirAbs)

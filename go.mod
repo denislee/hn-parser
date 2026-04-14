@@ -15,6 +15,7 @@ require (
 	github.com/gofrs/uuid/v5 v5.0.0 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/vincent-petithory/dataurl v1.0.0 // indirect
+	golang.org/x/image v0.39.0 // indirect
 	golang.org/x/net v0.41.0 // indirect
-	golang.org/x/text v0.26.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 )

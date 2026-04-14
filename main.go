@@ -30,7 +30,7 @@ const (
 	defaultRemote    = "git@github.com:denislee/denislee.github.io.git"
 	defaultBranch    = "master"
 	defaultSubdir    = "hn"
-	defaultUserAgent = "hn-parser/1.0 (+https://github.com/denislee/hn-parser)"
+	defaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
 func main() {
