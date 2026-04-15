@@ -240,7 +240,49 @@ func writeIndex(subdirAbs string) error {
 	if err := indexTmpl.Execute(&buf, data); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(subdirAbs, "index.html"), buf.Bytes(), 0o644)
+	if err := os.WriteFile(filepath.Join(subdirAbs, "index.html"), buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+
+	// Write PWA manifest and service worker.
+	manifest := `{
+  "name": "Hacker News Digests",
+  "short_name": "HN Digests",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#fafafa",
+  "theme_color": "#0645ad",
+  "icons": [
+    {
+      "src": "https://news.ycombinator.com/favicon.ico",
+      "sizes": "16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(subdirAbs, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		return err
+	}
+
+	sw := `const CACHE_NAME = 'hn-digests-v1';
+const ASSETS = [
+  './',
+  './index.html',
+  './manifest.json'
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    fetch(event.request).catch(() => caches.match(event.request))
+  );
+});`
+	return os.WriteFile(filepath.Join(subdirAbs, "sw.js"), []byte(sw), 0o644)
 }
 
 func isNotExist(err error) bool {

@@ -12,6 +12,9 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html>
 <meta charset="utf-8">
 <title>Hacker News Digests</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0645ad">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="https://news.ycombinator.com/favicon.ico">
 <style>
  body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#222;background:#fafafa;line-height:1.5}
  h1{font-size:1.4rem;margin:0 0 0.25rem}
@@ -49,6 +52,17 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html>
 {{- end }}
 </ul>
 <footer>Last updated {{ .Updated }}.</footer>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').then(reg => {
+        console.log('SW registered:', reg);
+      }).catch(err => {
+        console.log('SW registration failed:', err);
+      });
+    });
+  }
+</script>
 </body>
 </html>
 `))
