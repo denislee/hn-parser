@@ -7,8 +7,12 @@ package publish
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,8 +167,8 @@ func isCleanStaged(dir string) (bool, error) {
 }
 
 // digestFilePattern matches our dated digest files. The capture groups expose
-// the date and extension so we can group multiple formats (html, epub) per day.
-var digestFilePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.(html|epub)$`)
+// the date and extension so we can group multiple formats (html, epub, md) per day.
+var digestFilePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})(?:-(simplified))?\.(html|epub|md)$`)
 
 // pruneOld removes digest files older than keepDays from subdirAbs.
 func pruneOld(subdirAbs string, keepDays int) error {
@@ -203,7 +207,11 @@ func writeIndex(subdirAbs string) error {
 		if m == nil {
 			continue
 		}
-		date, ext := m[1], m[2]
+		date := m[1]
+		ext := m[3]
+		if m[2] == "simplified" {
+			ext = "simplified.md"
+		}
 		info, err := e.Info()
 		if err != nil && !isNotExist(err) {
 			return err
@@ -226,9 +234,11 @@ func writeIndex(subdirAbs string) error {
 	entries := make([]indexEntry, 0, len(dates))
 	for _, d := range dates {
 		entries = append(entries, indexEntry{
-			Date: d,
-			HTML: byDate[d]["html"],
-			EPUB: byDate[d]["epub"],
+			Date:         d,
+			HTML:         byDate[d]["html"],
+			EPUB:         byDate[d]["epub"],
+			MD:           byDate[d]["md"],
+			SimplifiedMD: byDate[d]["simplified.md"],
 		})
 	}
 
@@ -245,16 +255,29 @@ func writeIndex(subdirAbs string) error {
 	}
 
 	// Write PWA manifest and service worker.
+	favPath := filepath.Join(subdirAbs, "favicon.ico")
+	if _, err := os.Stat(favPath); os.IsNotExist(err) {
+		resp, err := http.Get("https://news.ycombinator.com/favicon.ico")
+		if err == nil && resp.StatusCode == http.StatusOK {
+			data, _ := io.ReadAll(resp.Body)
+			_ = os.WriteFile(favPath, data, 0o644)
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
 	manifest := `{
   "name": "Hacker News Digests",
   "short_name": "HN Digests",
   "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#fafafa",
   "theme_color": "#0645ad",
   "icons": [
     {
-      "src": "https://news.ycombinator.com/favicon.ico",
+      "src": "favicon.ico",
       "sizes": "16x16",
       "type": "image/x-icon"
     }
@@ -264,24 +287,85 @@ func writeIndex(subdirAbs string) error {
 		return err
 	}
 
-	sw := `const CACHE_NAME = 'hn-digests-v1';
+	// Build the list of assets to precache. Keep ordering stable so the
+	// cache-name hash below only changes when the set actually changes.
+	var assets []string
+	assets = append(assets, "./", "./index.html", "./manifest.json", "./favicon.ico", "./sw.js")
+	for _, e := range dates {
+		if n := byDate[e]["html"].Name; n != "" {
+			assets = append(assets, "./"+n)
+		}
+		if n := byDate[e]["epub"].Name; n != "" {
+			assets = append(assets, "./"+n)
+		}
+		if n := byDate[e]["md"].Name; n != "" {
+			assets = append(assets, "./"+n)
+		}
+		if n := byDate[e]["simplified.md"].Name; n != "" {
+			assets = append(assets, "./"+n)
+		}
+	}
+
+	// Version the cache by the asset list so new deploys invalidate the old cache.
+	h := sha256.Sum256([]byte(strings.Join(assets, "\n")))
+	version := hex.EncodeToString(h[:])[:8]
+
+	quoted := make([]string, len(assets))
+	for i, a := range assets {
+		quoted[i] = "'" + a + "'"
+	}
+
+	sw := fmt.Sprintf(`const CACHE_NAME = 'hn-digests-%s';
 const ASSETS = [
-  './',
-  './index.html',
-  './manifest.json'
+  %s
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
-  );
+  self.skipWaiting();
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    // Add each asset individually so one missing/slow file doesn't abort install.
+    await Promise.all(ASSETS.map(a => cache.add(a).catch(err => {
+      console.warn('sw: precache skipped', a, err);
+    })));
+  })());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
-  );
-});`
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
+  event.respondWith((async () => {
+    const cached = await caches.match(req, {ignoreSearch: true});
+    if (cached) return cached;
+    try {
+      const resp = await fetch(req);
+      if (resp && resp.ok && resp.type === 'basic') {
+        const cache = await caches.open(CACHE_NAME);
+        cache.put(req, resp.clone());
+      }
+      return resp;
+    } catch (err) {
+      // Offline and not cached — fall back to the index for HTML navigations.
+      if (req.mode === 'navigate' || req.destination === 'document') {
+        const fallback = await caches.match('./index.html');
+        if (fallback) return fallback;
+      }
+      throw err;
+    }
+  })());
+});
+`, version, strings.Join(quoted, ",\n  "))
 	return os.WriteFile(filepath.Join(subdirAbs, "sw.js"), []byte(sw), 0o644)
 }
 

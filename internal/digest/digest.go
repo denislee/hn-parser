@@ -21,7 +21,13 @@ type Entry struct {
 
 // Render produces the HTML digest body.
 func Render(runTime time.Time, entries []Entry) (string, error) {
-	view := newView(runTime, entries)
+	imgProc, err := newImgProcessor(nil)
+	if err != nil {
+		return "", fmt.Errorf("new img processor: %w", err)
+	}
+	defer imgProc.close()
+
+	view := newView(runTime, entries, imgProc)
 	var buf bytes.Buffer
 	if err := digestTmpl.Execute(&buf, view); err != nil {
 		return "", err
@@ -37,31 +43,31 @@ type sourceRow struct {
 }
 
 type viewEntry struct {
-	Rank       int
-	Anchor     string
-	Title      string
-	HNLink     string
-	URL        string
-	By         string
-	Score      int
-	Comments   int
-	Posted     string
-	SiteName   string
-	Byline     string
-	Excerpt    string
-	Source     []sourceRow   // rows of the info card
-	Body       template.HTML // trusted: from go-readability or HN's own item.Text
-	Note       string        // error / skipped / "no content" label
+	Rank     int
+	Anchor   string
+	Title    string
+	HNLink   string
+	URL      string
+	By       string
+	Score    int
+	Comments int
+	Posted   string
+	SiteName string
+	Byline   string
+	Excerpt  string
+	Source   []sourceRow   // rows of the info card
+	Body     template.HTML // trusted: from go-readability or HN's own item.Text
+	Note     string        // error / skipped / "no content" label
 }
 
 type view struct {
-	Title    string
-	RunTime  string
-	Count    int
-	Entries  []viewEntry
+	Title   string
+	RunTime string
+	Count   int
+	Entries []viewEntry
 }
 
-func newView(runTime time.Time, entries []Entry) view {
+func newView(runTime time.Time, entries []Entry, imgProc *imgProcessor) view {
 	v := view{
 		Title:   fmt.Sprintf("Hacker News Top %d — %s", len(entries), runTime.UTC().Format("2006-01-02")),
 		RunTime: runTime.UTC().Format("2006-01-02 15:04 UTC"),
@@ -69,12 +75,12 @@ func newView(runTime time.Time, entries []Entry) view {
 		Entries: make([]viewEntry, 0, len(entries)),
 	}
 	for i, e := range entries {
-		v.Entries = append(v.Entries, buildEntry(i+1, e))
+		v.Entries = append(v.Entries, buildEntry(i+1, e, imgProc))
 	}
 	return v
 }
 
-func buildEntry(rank int, e Entry) viewEntry {
+func buildEntry(rank int, e Entry, imgProc *imgProcessor) viewEntry {
 	it := e.Item
 	ve := viewEntry{
 		Rank:     rank,
@@ -105,7 +111,8 @@ func buildEntry(rank int, e Entry) viewEntry {
 		ve.Note = e.Scrape.Skipped
 	case e.Scrape != nil && strings.TrimSpace(e.Scrape.HTML) != "":
 		// go-readability already strips <script> and dangerous attributes.
-		ve.Body = template.HTML(e.Scrape.HTML) // #nosec G203 -- sanitized upstream
+		html := imgProc.ProcessHTML(e.Scrape.HTML, it.URL)
+		ve.Body = template.HTML(html) // #nosec G203 -- sanitized upstream
 	case strings.TrimSpace(it.Text) != "":
 		// Ask/Show HN body is HN-controlled HTML (<p>, <a>, <i>, <pre>).
 		ve.Body = template.HTML(it.Text) // #nosec G203 -- from HN API
@@ -224,7 +231,7 @@ var digestTmpl = template.Must(template.New("digest").Parse(`<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0645ad">
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="https://news.ycombinator.com/favicon.ico">
+<link rel="apple-touch-icon" href="favicon.ico">
 <style>
  :root{--fg:#222;--muted:#666;--bg:#fafafa;--card:#fff;--border:#e5e5e5;--link:#0645ad}
  *{box-sizing:border-box}
@@ -264,16 +271,41 @@ var digestTmpl = template.Must(template.New("digest").Parse(`<!doctype html>
  .backtop{margin-top:0.8rem;font-size:0.85em}
  .backtop a{color:var(--muted);text-decoration:none}
  footer{margin:3rem 0 1rem;color:var(--muted);font-size:0.85em;text-align:center}
- #tts-btn{display:inline-block;padding:0.4rem 0.8rem;border:1px solid var(--border);border-radius:4px;color:var(--link);text-decoration:none;background:var(--card);cursor:pointer;margin-top:0.5rem;font-size:0.9em}
- #tts-btn:hover{background:var(--bg)}
+ .play-btn{display:inline-block;padding:0.25rem 0.6rem;border:1px solid var(--border);border-radius:4px;color:var(--link);text-decoration:none;background:var(--card);cursor:pointer;margin-bottom:0.7rem;font-size:0.88em}
+ .play-btn:hover{background:var(--bg)}
+ .tts-settings{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:0.6rem 0.8rem;margin-bottom:1.5rem;font-size:0.88em;display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center}
+ .tts-settings .setting{display:flex;align-items:center;gap:0.5rem}
+ .tts-settings label{color:var(--muted);font-weight:600}
+ .tts-settings select{padding:0.2rem 0.4rem;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--fg)}
+ .tts-para{background:#ececec;border-radius:4px;box-shadow:0 0 0 0.25rem #ececec;transition:background 0.15s,box-shadow 0.15s}
+ .tts-word{background:#fff176;border-radius:2px}
+ .tts-w{transition:background 0.08s}
 </style>
 </head>
 <body>
 <header>
 <h1>{{ .Title }}</h1>
 <p>Generated {{ .RunTime }} · <a href="./">← all digests</a></p>
-<button id="tts-btn" onclick="togglePlay()">▶ Play Audio</button>
 </header>
+
+<div class="tts-settings" id="tts-settings-box" style="display:none;">
+  <div class="setting">
+    <label for="voice-select">Voice:</label>
+    <select id="voice-select"></select>
+  </div>
+  <div class="setting">
+    <label for="speed-select">Speed:</label>
+    <select id="speed-select">
+      <option value="0.5">0.5x</option>
+      <option value="0.75">0.75x</option>
+      <option value="1" selected>1x</option>
+      <option value="1.25">1.25x</option>
+      <option value="1.5">1.5x</option>
+      <option value="1.75">1.75x</option>
+      <option value="2">2x</option>
+    </select>
+  </div>
+</div>
 
 <nav class="toc" id="top">
 <details open>
@@ -289,6 +321,7 @@ var digestTmpl = template.Must(template.New("digest").Parse(`<!doctype html>
 {{ range .Entries }}
 <article id="{{ .Anchor }}">
   <h2><span class="rank">{{ .Rank }}.</span>{{ if .URL }}<a href="{{ .URL }}" target="_blank" rel="noopener noreferrer">{{ .Title }}</a>{{ else }}<a href="{{ .HNLink }}" target="_blank" rel="noopener noreferrer">{{ .Title }}</a>{{ end }}</h2>
+  <button class="play-btn" id="btn-{{ .Anchor }}" onclick="togglePlay('{{ .Anchor }}')">▶ Play</button>
   {{- if .Source }}
   <div class="source">
   {{- range .Source }}
@@ -310,34 +343,274 @@ var digestTmpl = template.Must(template.New("digest").Parse(`<!doctype html>
 
 <footer>Generated by <a href="https://github.com/denislee/hn-parser">hn-parser</a>.</footer>
 <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+</script>
+<script>
   let synthesis = window.speechSynthesis;
-  let utterance = null;
-  let isPlaying = false;
+  let currentId = null;
+  let currentUtterance = null;
+  let voices = [];
 
-  function togglePlay() {
-    const btn = document.getElementById('tts-btn');
-    if (isPlaying) {
-      synthesis.cancel();
-      isPlaying = false;
-      btn.textContent = '▶ Play Audio';
-    } else {
-      const textToSpeak = [];
-      document.querySelectorAll('article').forEach(article => {
-        const title = article.querySelector('h2').innerText;
-        const body = article.querySelector('.body') ? article.querySelector('.body').innerText : '';
-        textToSpeak.push(title);
-        if (body) textToSpeak.push(body);
-      });
+  const settingsBox = document.getElementById('tts-settings-box');
+  const voiceSelect = document.getElementById('voice-select');
+  const speedSelect = document.getElementById('speed-select');
+
+  if (!synthesis) {
+    console.error('TTS: window.speechSynthesis is not supported in this browser.');
+  } else {
+    console.log('TTS: window.speechSynthesis is supported.');
+    settingsBox.style.display = 'flex';
+    
+    function loadVoices() {
+      voices = synthesis.getVoices();
+      voiceSelect.innerHTML = '';
       
-      utterance = new SpeechSynthesisUtterance(textToSpeak.join('. '));
-      utterance.onend = () => {
-        isPlaying = false;
-        btn.textContent = '▶ Play Audio';
-      };
-      synthesis.speak(utterance);
-      isPlaying = true;
-      btn.textContent = '⏹ Stop Audio';
+      // Filter for English voices or just show all if preferred
+      const preferredVoices = voices.filter(v => v.lang.startsWith('en'));
+      const displayVoices = preferredVoices.length > 0 ? preferredVoices : voices;
+      
+      displayVoices.forEach((voice, i) => {
+        const option = document.createElement('option');
+        option.textContent = voice.name + " (" + voice.lang + ")";
+        if (voice.default) {
+          option.textContent += ' -- DEFAULT';
+        }
+        option.setAttribute('data-lang', voice.lang);
+        option.setAttribute('data-name', voice.name);
+        option.value = i;
+        voiceSelect.appendChild(option);
+      });
+
+      // Try to restore previous selection from localStorage
+      const savedVoiceName = localStorage.getItem('tts-voice');
+      if (savedVoiceName) {
+        const index = displayVoices.findIndex(v => v.name === savedVoiceName);
+        if (index !== -1) voiceSelect.value = index;
+      }
     }
+
+    loadVoices();
+    if (synthesis.onvoiceschanged !== undefined) {
+      synthesis.onvoiceschanged = loadVoices;
+    }
+
+    voiceSelect.onchange = () => {
+      const selectedVoice = getSelectedVoice();
+      if (selectedVoice) {
+        localStorage.setItem('tts-voice', selectedVoice.name);
+      }
+    };
+
+    // Restore speed from localStorage
+    const savedSpeed = localStorage.getItem('tts-speed');
+    if (savedSpeed) speedSelect.value = savedSpeed;
+    
+    speedSelect.onchange = () => {
+      localStorage.setItem('tts-speed', speedSelect.value);
+    };
+  }
+
+  function getSelectedVoice() {
+    const selectedIndex = voiceSelect.value;
+    const preferredVoices = voices.filter(v => v.lang.startsWith('en'));
+    const displayVoices = preferredVoices.length > 0 ? preferredVoices : voices;
+    return displayVoices[selectedIndex];
+  }
+
+  let currentWordSpan = null;
+  let currentBlockEl = null;
+  let playToken = 0;
+
+  const BLOCK_SEL = 'p, h3, h4, li, blockquote, pre';
+
+  function collectBlocks(article) {
+    const blocks = [];
+    const h2 = article.querySelector('h2');
+    if (h2) blocks.push(h2);
+    const body = article.querySelector('.body');
+    if (body) {
+      const found = Array.from(body.querySelectorAll(BLOCK_SEL));
+      // Keep only top-most matches (drop blocks contained in another match).
+      found.forEach(el => {
+        if (!found.some(o => o !== el && o.contains(el))) blocks.push(el);
+      });
+      if (blocks.length === 1 && body.innerText.trim()) {
+        // No structured blocks — fall back to the whole body.
+        blocks.push(body);
+      }
+    } else {
+      const excerpt = article.querySelector('.excerpt');
+      if (excerpt) blocks.push(excerpt);
+      const note = article.querySelector('.note');
+      if (note) blocks.push(note);
+    }
+    return blocks;
+  }
+
+  function wrapWords(el) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const p = node.parentElement;
+        if (!p) return NodeFilter.FILTER_REJECT;
+        if (p.closest('script,style')) return NodeFilter.FILTER_REJECT;
+        if (p.classList && p.classList.contains('tts-w')) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    const textNodes = [];
+    let n;
+    while ((n = walker.nextNode())) textNodes.push(n);
+    textNodes.forEach(tn => {
+      const frag = document.createDocumentFragment();
+      const parts = tn.nodeValue.split(/(\s+)/);
+      parts.forEach(part => {
+        if (part === '') return;
+        if (/^\s+$/.test(part)) {
+          frag.appendChild(document.createTextNode(part));
+        } else {
+          const s = document.createElement('span');
+          s.className = 'tts-w';
+          s.textContent = part;
+          frag.appendChild(s);
+        }
+      });
+      tn.parentNode.replaceChild(frag, tn);
+    });
+  }
+
+  function prepareBlock(el) {
+    if (el.dataset.ttsPrepared !== '1') {
+      wrapWords(el);
+      el.dataset.ttsPrepared = '1';
+    }
+    let text = '';
+    const offsets = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = walker.nextNode())) {
+      const p = n.parentElement;
+      if (p && p.classList && p.classList.contains('tts-w')) {
+        const start = text.length;
+        text += n.nodeValue;
+        offsets.push({span: p, start, end: text.length});
+      } else {
+        text += n.nodeValue;
+      }
+    }
+    return {el, text, offsets};
+  }
+
+  function clearHighlights() {
+    if (currentWordSpan) {
+      currentWordSpan.classList.remove('tts-word');
+      currentWordSpan = null;
+    }
+    if (currentBlockEl) {
+      currentBlockEl.classList.remove('tts-para');
+      currentBlockEl = null;
+    }
+  }
+
+  function togglePlay(id) {
+    if (currentId === id) {
+      playToken++;
+      synthesis.cancel();
+      currentId = null;
+      currentUtterance = null;
+      clearHighlights();
+      updateButtons();
+      return;
+    }
+
+    playToken++;
+    synthesis.cancel();
+    clearHighlights();
+
+    const article = document.getElementById(id);
+    if (!article) return;
+
+    const blocks = collectBlocks(article).map(prepareBlock).filter(b => b.text.trim());
+    if (blocks.length === 0) return;
+
+    currentId = id;
+    updateButtons();
+    playQueue(blocks, 0, playToken);
+  }
+
+  function playQueue(queue, i, token) {
+    if (token !== playToken || currentId === null) return;
+    if (i >= queue.length) {
+      currentId = null;
+      currentUtterance = null;
+      clearHighlights();
+      updateButtons();
+      return;
+    }
+    const {el, text, offsets} = queue[i];
+    const utt = new SpeechSynthesisUtterance(text);
+    currentUtterance = utt;
+
+    const voice = getSelectedVoice();
+    if (voice) utt.voice = voice;
+    utt.rate = parseFloat(speedSelect.value) || 1.0;
+
+    utt.onstart = () => {
+      if (token !== playToken) return;
+      if (currentBlockEl) currentBlockEl.classList.remove('tts-para');
+      currentBlockEl = el;
+      el.classList.add('tts-para');
+      el.scrollIntoView({block: 'center', behavior: 'smooth'});
+    };
+
+    utt.onboundary = (e) => {
+      if (token !== playToken) return;
+      if (e.name && e.name !== 'word') return;
+      const idx = e.charIndex;
+      const off = offsets.find(o => idx >= o.start && idx < o.end);
+      if (!off) return;
+      if (currentWordSpan) currentWordSpan.classList.remove('tts-word');
+      currentWordSpan = off.span;
+      off.span.classList.add('tts-word');
+      const r = off.span.getBoundingClientRect();
+      const margin = window.innerHeight * 0.15;
+      if (r.top < margin || r.bottom > window.innerHeight - margin) {
+        off.span.scrollIntoView({block: 'center', behavior: 'smooth'});
+      }
+    };
+
+    utt.onend = () => {
+      if (token !== playToken) return;
+      if (currentWordSpan) { currentWordSpan.classList.remove('tts-word'); currentWordSpan = null; }
+      playQueue(queue, i + 1, token);
+    };
+
+    utt.onerror = () => {
+      if (token !== playToken) return;
+      if (currentWordSpan) { currentWordSpan.classList.remove('tts-word'); currentWordSpan = null; }
+      if (currentBlockEl) { currentBlockEl.classList.remove('tts-para'); currentBlockEl = null; }
+      currentId = null;
+      currentUtterance = null;
+      updateButtons();
+    };
+
+    synthesis.speak(utt);
+    synthesis.resume();
+  }
+
+  function updateButtons() {
+    document.querySelectorAll('.play-btn').forEach(btn => {
+      const btnId = btn.id.replace('btn-', '');
+      if (btnId === currentId) {
+        btn.textContent = '⏹ Stop';
+      } else {
+        btn.textContent = '▶ Play';
+      }
+    });
   }
 </script>
 </body>

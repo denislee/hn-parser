@@ -8,9 +8,12 @@ package scrape
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -36,29 +39,56 @@ type Result struct {
 
 // Scraper is a reusable fetcher. The zero value is not usable; use New.
 type Scraper struct {
-	http    *http.Client
-	ua      string
-	maxSize int64
+	http         *http.Client
+	httpInsecure *http.Client
+	ua           string
+	maxSize      int64
 }
 
 // New returns a Scraper. perRequestTimeout is applied via context on each
 // Fetch call; the underlying http.Client timeout should be larger or zero
 // so Scraper can cancel cleanly via the context.
 func New(ua string, perRequestTimeout time.Duration) *Scraper {
+	checkRedirect := func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	}
+	clientTimeout := perRequestTimeout + 10*time.Second
+	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- fallback for broken certs on content scraping
 	return &Scraper{
 		http: &http.Client{
-			// A generous overall cap; real cancellation uses ctx.
-			Timeout: perRequestTimeout + 10*time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return errors.New("too many redirects")
-				}
-				return nil
-			},
+			Timeout:       clientTimeout,
+			CheckRedirect: checkRedirect,
+		},
+		httpInsecure: &http.Client{
+			Timeout:       clientTimeout,
+			CheckRedirect: checkRedirect,
+			Transport:     insecureTransport,
 		},
 		ua:      ua,
 		maxSize: 8 << 20, // 8 MiB cap on response body
 	}
+}
+
+// isTLSCertError returns true if err is a TLS certificate verification failure
+// (expired, self-signed, unknown authority, hostname mismatch, etc.).
+func isTLSCertError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var invalidErr x509.CertificateInvalidError
+	var tlsRecordErr *tls.RecordHeaderError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &hostnameErr) ||
+		errors.As(err, &invalidErr) || errors.As(err, &tlsRecordErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "x509:") || strings.Contains(msg, "tls: failed to verify certificate")
 }
 
 // binaryExts are URL path suffixes we won't even try to read.
@@ -102,6 +132,14 @@ func (s *Scraper) Fetch(ctx context.Context, pageURL string, timeout time.Durati
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 	resp, err := s.http.Do(req)
+	if err != nil && isTLSCertError(err) {
+		log.Printf("scrape: TLS cert invalid for %s (%v); retrying without verification", pageURL, err)
+		retryReq, rerr := http.NewRequestWithContext(reqCtx, http.MethodGet, pageURL, nil)
+		if rerr == nil {
+			retryReq.Header = req.Header.Clone()
+			resp, err = s.httpInsecure.Do(retryReq)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch: %w", err)
 	}
@@ -165,4 +203,3 @@ func (s *Scraper) Fetch(ctx context.Context, pageURL string, timeout time.Durati
 		HTML:          htmlOut,
 	}, nil
 }
-

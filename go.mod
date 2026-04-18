@@ -8,6 +8,8 @@ require (
 )
 
 require (
+	github.com/JohannesKaufmann/dom v0.2.0 // indirect
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/gabriel-vasile/mimetype v1.4.3 // indirect
@@ -16,6 +18,6 @@ require (
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/vincent-petithory/dataurl v1.0.0 // indirect
 	golang.org/x/image v0.39.0 // indirect
-	golang.org/x/net v0.41.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 )

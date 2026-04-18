@@ -58,7 +58,7 @@ func RenderEPUB(runTime time.Time, entries []Entry) ([]byte, error) {
 
 	for i, e := range entries {
 		body, secTitle := buildChapter(i+1, e)
-		body = imgProc.processHTML(body)
+		body = imgProc.ProcessHTML(body, e.Item.URL)
 		if _, err := book.AddSection(body, secTitle, fmt.Sprintf("story-%04d.xhtml", i+1), cssPath); err != nil {
 			return nil, fmt.Errorf("add section %d: %w", i+1, err)
 		}

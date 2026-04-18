@@ -3,14 +3,16 @@ package digest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"image"
-	"image/jpeg"
 	_ "image/gif"
+	"image/jpeg"
 	_ "image/png"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,24 +25,25 @@ import (
 )
 
 const (
-	imgMaxWidth     = 600  // px – fits most e-readers
-	imgMaxHeight    = 800  // px
-	jpegQuality     = 55   // compact but readable
+	imgMaxWidth     = 600 // px – fits most e-readers
+	imgMaxHeight    = 800 // px
+	jpegQuality     = 55  // compact but readable
 	imgFetchTimeout = 10 * time.Second
 	maxImgBytes     = 5 << 20 // 5 MiB download cap (resized+compressed on output)
 )
 
-// imgProcessor downloads, resizes, and embeds images into an EPUB book.
+// imgProcessor downloads, resizes, and embeds images into an EPUB book or
+// converts them to data URLs for standalone HTML.
 type imgProcessor struct {
 	client  *http.Client
 	book    *epub.Epub
 	tempDir string
-	cache   map[string]string // srcURL → EPUB internal path
+	cache   map[string]string // srcURL → EPUB internal path or data URL
 	counter int
 }
 
 func newImgProcessor(book *epub.Epub) (*imgProcessor, error) {
-	dir, err := os.MkdirTemp("", "hn-epub-img-*")
+	dir, err := os.MkdirTemp("", "hn-digest-img-*")
 	if err != nil {
 		return nil, err
 	}
@@ -58,12 +61,18 @@ func (p *imgProcessor) close() {
 
 // imgSrcRE matches <img ... src="URL" ...> and captures the three parts so
 // we can replace just the URL while preserving the rest of the tag.
-var imgSrcRE = regexp.MustCompile(`(<img\b[^>]*?\bsrc\s*=\s*")([^"]+)("[^>]*/?>)`)
+var imgSrcRE = regexp.MustCompile(`(?i)(<img\b[^>]*?\bsrc\s*=\s*")([^"]+)("[^>]*/?>)`)
 
-// processHTML finds all <img> tags, downloads/resizes their sources, embeds
-// them in the EPUB, and returns HTML with updated src attributes.
+// ProcessHTML finds all <img> tags, downloads/resizes their sources, embeds
+// them (either in the EPUB or as data URLs), and returns updated HTML.
 // Images that fail to download or decode are silently removed.
-func (p *imgProcessor) processHTML(html string) string {
+// baseURL is used to resolve relative image paths.
+func (p *imgProcessor) ProcessHTML(html string, baseURL string) string {
+	var base *url.URL
+	if baseURL != "" {
+		base, _ = url.Parse(baseURL)
+	}
+
 	return imgSrcRE.ReplaceAllStringFunc(html, func(match string) string {
 		sub := imgSrcRE.FindStringSubmatch(match)
 		if len(sub) < 4 {
@@ -75,12 +84,18 @@ func (p *imgProcessor) processHTML(html string) string {
 			return match
 		}
 
-		epubPath, err := p.embed(srcURL)
+		if base != nil {
+			if u, err := url.Parse(srcURL); err == nil && !u.IsAbs() {
+				srcURL = base.ResolveReference(u).String()
+			}
+		}
+
+		newSrc, err := p.embed(srcURL)
 		if err != nil {
 			log.Printf("  image skip: %s: %v", truncURL(srcURL), err)
 			return "" // drop broken image tag
 		}
-		return prefix + epubPath + suffix
+		return prefix + newSrc + suffix
 	})
 }
 
@@ -119,14 +134,20 @@ func (p *imgProcessor) embed(srcURL string) (string, error) {
 
 	ct := resp.Header.Get("Content-Type")
 
-	// SVG: embed directly (EPUB supports SVG natively).
+	// SVG: embed directly or as data URL.
 	if isSVG(srcURL, ct, data) {
-		epubPath, err := p.embedSVG(data, n)
+		var newSrc string
+		var err error
+		if p.book != nil {
+			newSrc, err = p.embedSVG(data, n)
+		} else {
+			newSrc = "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(data)
+		}
 		if err != nil {
 			return "", err
 		}
-		p.cache[srcURL] = epubPath
-		return epubPath, nil
+		p.cache[srcURL] = newSrc
+		return newSrc, nil
 	}
 
 	// Raster image: decode → resize → JPEG.
@@ -143,25 +164,28 @@ func (p *imgProcessor) embed(srcURL string) (string, error) {
 
 	img = fitImage(img, imgMaxWidth, imgMaxHeight)
 
-	fname := fmt.Sprintf("img-%04d.jpg", n)
-	tmp := filepath.Join(p.tempDir, fname)
-	f, err := os.Create(tmp)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: jpegQuality}); err != nil {
 		return "", err
 	}
-	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: jpegQuality}); err != nil {
-		f.Close()
-		return "", err
-	}
-	f.Close()
 
-	epubPath, err := p.book.AddImage(tmp, fname)
-	if err != nil {
-		return "", fmt.Errorf("add to epub: %w", err)
+	var newSrc string
+	if p.book != nil {
+		fname := fmt.Sprintf("img-%04d.jpg", n)
+		tmp := filepath.Join(p.tempDir, fname)
+		if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
+			return "", err
+		}
+		newSrc, err = p.book.AddImage(tmp, fname)
+		if err != nil {
+			return "", fmt.Errorf("add to epub: %w", err)
+		}
+	} else {
+		newSrc = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 	}
 
-	p.cache[srcURL] = epubPath
-	return epubPath, nil
+	p.cache[srcURL] = newSrc
+	return newSrc, nil
 }
 
 // isSVG returns true if the response looks like an SVG image.
