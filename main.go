@@ -89,9 +89,9 @@ func main() {
 	if err != nil {
 		fatal("render md digest: %v", err)
 	}
-	simplifiedMDBody, err := digest.RenderSimplifiedMD(runTime, entries)
+	txtBody, err := digest.RenderTXT(runTime, entries)
 	if err != nil {
-		fatal("render simplified md digest: %v", err)
+		fatal("render txt digest: %v", err)
 	}
 
 	date := runTime.Format("2006-01-02")
@@ -99,7 +99,7 @@ func main() {
 		{Name: date + ".html", Content: []byte(htmlBody)},
 		{Name: date + ".epub", Content: epubBody},
 		{Name: date + ".md", Content: mdBody},
-		{Name: date + "-simplified.md", Content: simplifiedMDBody},
+		{Name: date + ".txt", Content: txtBody},
 	}
 
 	for _, f := range files {

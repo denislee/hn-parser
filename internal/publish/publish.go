@@ -168,7 +168,7 @@ func isCleanStaged(dir string) (bool, error) {
 
 // digestFilePattern matches our dated digest files. The capture groups expose
 // the date and extension so we can group multiple formats (html, epub, md) per day.
-var digestFilePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})(?:-(simplified))?\.(html|epub|md)$`)
+var digestFilePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.(html|epub|md|txt)$`)
 
 // pruneOld removes digest files older than keepDays from subdirAbs.
 func pruneOld(subdirAbs string, keepDays int) error {
@@ -208,10 +208,7 @@ func writeIndex(subdirAbs string) error {
 			continue
 		}
 		date := m[1]
-		ext := m[3]
-		if m[2] == "simplified" {
-			ext = "simplified.md"
-		}
+		ext := m[2]
 		info, err := e.Info()
 		if err != nil && !isNotExist(err) {
 			return err
@@ -234,11 +231,11 @@ func writeIndex(subdirAbs string) error {
 	entries := make([]indexEntry, 0, len(dates))
 	for _, d := range dates {
 		entries = append(entries, indexEntry{
-			Date:         d,
-			HTML:         byDate[d]["html"],
-			EPUB:         byDate[d]["epub"],
-			MD:           byDate[d]["md"],
-			SimplifiedMD: byDate[d]["simplified.md"],
+			Date: d,
+			HTML: byDate[d]["html"],
+			EPUB: byDate[d]["epub"],
+			MD:   byDate[d]["md"],
+			TXT:  byDate[d]["txt"],
 		})
 	}
 
@@ -301,7 +298,7 @@ func writeIndex(subdirAbs string) error {
 		if n := byDate[e]["md"].Name; n != "" {
 			assets = append(assets, "./"+n)
 		}
-		if n := byDate[e]["simplified.md"].Name; n != "" {
+		if n := byDate[e]["txt"].Name; n != "" {
 			assets = append(assets, "./"+n)
 		}
 	}

@@ -34,6 +34,7 @@ type Result struct {
 	PublishedTime time.Time // Zero if not detected
 	WordCount     int       // Approximate word count of the extracted body
 	HTML          string    // Cleaned HTML body (may be empty on failure). Already sanitized by readability.
+	Text          string    // Cleaned plain text body.
 	Skipped       string    // Non-empty if we deliberately skipped (e.g. PDF)
 }
 
@@ -167,6 +168,7 @@ func (s *Scraper) Fetch(ctx context.Context, pageURL string, timeout time.Durati
 
 	var (
 		htmlOut   string
+		textOut   string
 		wordCount int
 		excerpt   string
 	)
@@ -179,7 +181,8 @@ func (s *Scraper) Fetch(ctx context.Context, pageURL string, timeout time.Durati
 
 		var tb strings.Builder
 		if err := article.RenderText(&tb); err == nil {
-			wordCount = len(strings.Fields(tb.String()))
+			textOut = tb.String()
+			wordCount = len(strings.Fields(textOut))
 		}
 		// Excerpt() walks article.Node internally, so we must only call it
 		// after we've confirmed Node is non-nil; otherwise the library panics.
@@ -201,5 +204,6 @@ func (s *Scraper) Fetch(ctx context.Context, pageURL string, timeout time.Durati
 		PublishedTime: published,
 		WordCount:     wordCount,
 		HTML:          htmlOut,
+		Text:          textOut,
 	}, nil
 }

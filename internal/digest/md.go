@@ -3,7 +3,6 @@ package digest
 import (
 	"bytes"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -60,24 +59,4 @@ func RenderMD(runTime time.Time, entries []Entry) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-// RenderSimplifiedMD produces a simplified Markdown file where images are replaced with '[image]' and links with '[link]'.
-func RenderSimplifiedMD(runTime time.Time, entries []Entry) ([]byte, error) {
-	b, err := RenderMD(runTime, entries)
-	if err != nil {
-		return nil, err
-	}
-
-	text := string(b)
-
-	// Replace images first so they don't get caught as links if they are wrapped in links.
-	imgRe := regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
-	text = imgRe.ReplaceAllString(text, "[image]")
-
-	// Replace links
-	linkRe := regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
-	text = linkRe.ReplaceAllString(text, "[link]")
-
-	return []byte(text), nil
 }

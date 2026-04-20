@@ -46,7 +46,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html>
       {{- if .HTML.Name }}<a href="{{ .HTML.Name }}">HTML</a><span class="size">{{ .HTML.Size }}</span>{{ else }}<span class="na">HTML —</span>{{ end }}
       {{ if .EPUB.Name }}<a href="{{ .EPUB.Name }}">EPUB</a><span class="size">{{ .EPUB.Size }}</span>{{ else }}<span class="na">EPUB —</span>{{ end }}
       {{ if .MD.Name }}<a href="{{ .MD.Name }}">MD</a><span class="size">{{ .MD.Size }}</span>{{ else }}<span class="na">MD —</span>{{ end }}
-      {{ if .SimplifiedMD.Name }}<a href="{{ .SimplifiedMD.Name }}">Simplified MD</a><span class="size">{{ .SimplifiedMD.Size }}</span>{{ else }}<span class="na">Simplified MD —</span>{{ end }}
+      {{ if .TXT.Name }}<a href="{{ .TXT.Name }}">TXT</a><span class="size">{{ .TXT.Size }}</span>{{ else }}<span class="na">TXT —</span>{{ end }}
     </span>
   </li>
 {{- else }}
@@ -79,7 +79,7 @@ type indexEntry struct {
 	HTML         indexFile
 	EPUB         indexFile
 	MD           indexFile
-	SimplifiedMD indexFile
+	TXT          indexFile
 }
 
 type indexFile struct {
