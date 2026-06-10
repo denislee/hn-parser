@@ -12,11 +12,16 @@ For each top story it:
 2. Fetches the linked article and runs it through
    [go-readability](https://codeberg.org/readeck/go-readability) to
    extract the cleaned article content (Mozilla Readability port).
-3. Renders two files:
+3. Renders several files:
    - `hn/YYYY-MM-DD.html` — single styled HTML page with all stories.
    - `hn/YYYY-MM-DD.epub` — EPUB with one chapter per story, built via
      [go-epub](https://github.com/go-shiori/go-epub).
-4. Regenerates `hn/index.html`, one row per date with HTML + EPUB links.
+   - `hn/YYYY-MM-DD.md` / `.txt` — Markdown and plain-text digests.
+   - `hn/YYYY-MM-DD.rsvp` — the tiny `.rsvp` speed-reading format (one
+     `@chapter` per story) read by the
+     [RSVP Nano](https://ionutdecebal.github.io/rsvpnano/) ESP32 reader and
+     its browser converter.
+4. Regenerates `hn/index.html`, one row per date with links to each format.
 5. Commits and pushes the target repo on `master`.
 
 Ask HN / Show HN posts with no external URL use the item's own text.
@@ -83,10 +88,11 @@ GitHub Pages usually publishes ~1 min after push.
 
 ## Notes
 
-- Same-day re-runs overwrite both `hn/YYYY-MM-DD.html` and
-  `hn/YYYY-MM-DD.epub` and produce a second commit (or none if both
-  files are byte-identical).
+- Same-day re-runs overwrite `hn/YYYY-MM-DD.{html,epub,md,txt,rsvp}` and
+  produce a second commit (or none if all files are byte-identical).
 - The app only stages files inside `-subdir`, so unrelated changes in
   your working clone are never swept into a digest commit.
 - The User-Agent on all outgoing requests is
+  `hn-parser/1.0 (+https://github.com/denislee/hn-parser)`.
+ is
   `hn-parser/1.0 (+https://github.com/denislee/hn-parser)`.

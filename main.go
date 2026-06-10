@@ -93,6 +93,10 @@ func main() {
 	if err != nil {
 		fatal("render txt digest: %v", err)
 	}
+	rsvpBody, err := digest.RenderRSVP(runTime, entries)
+	if err != nil {
+		fatal("render rsvp digest: %v", err)
+	}
 
 	date := runTime.Format("2006-01-02")
 	files := []publish.File{
@@ -100,6 +104,7 @@ func main() {
 		{Name: date + ".epub", Content: epubBody},
 		{Name: date + ".md", Content: mdBody},
 		{Name: date + ".txt", Content: txtBody},
+		{Name: date + ".rsvp", Content: rsvpBody},
 	}
 
 	for _, f := range files {
